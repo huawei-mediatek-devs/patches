@@ -1,0 +1,148 @@
+From 80a4a1d33d5f91763c0a14b937de1a4d92f0dac8 Mon Sep 17 00:00:00 2001
+From: R0rt1z2 <me@r0rt1z2.com>
+Date: Sun, 17 Mar 2024 01:52:14 +0100
+Subject: [PATCH] Revert "No-op color management sysprop."
+
+This reverts commit 5f62a6002aaeb321e1344931a1c981f3cb7bac6c.
+---
+ services/surfaceflinger/SurfaceFlinger.cpp            |  6 ++++++
+ services/surfaceflinger/SurfaceFlinger.h              |  2 +-
+ services/surfaceflinger/SurfaceFlingerProperties.cpp  | 11 +++++++++++
+ services/surfaceflinger/SurfaceFlingerProperties.h    |  2 ++
+ .../tests/unittests/DisplayTransactionTest.cpp        |  1 +
+ .../tests/unittests/DisplayTransactionTestHelpers.h   |  2 ++
+ ...rfaceFlinger_SetupNewDisplayDeviceInternalTest.cpp |  1 +
+ .../tests/unittests/TestableSurfaceFlinger.h          |  1 +
+ 8 files changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/services/surfaceflinger/SurfaceFlinger.cpp b/services/surfaceflinger/SurfaceFlinger.cpp
+index 08cb4ebdc7..5f3cfc3c9e 100644
+--- a/services/surfaceflinger/SurfaceFlinger.cpp
++++ b/services/surfaceflinger/SurfaceFlinger.cpp
+@@ -336,6 +336,7 @@ bool SurfaceFlinger::hasSyncFramework;
+ int64_t SurfaceFlinger::maxFrameBufferAcquiredBuffers;
+ uint32_t SurfaceFlinger::maxGraphicsWidth;
+ uint32_t SurfaceFlinger::maxGraphicsHeight;
++bool SurfaceFlinger::useColorManagement;
+ bool SurfaceFlinger::useContextPriority;
+ Dataspace SurfaceFlinger::defaultCompositionDataspace = Dataspace::V0_SRGB;
+ ui::PixelFormat SurfaceFlinger::defaultCompositionPixelFormat = ui::PixelFormat::RGBA_8888;
+@@ -399,6 +400,11 @@ SurfaceFlinger::SurfaceFlinger(Factory& factory) : SurfaceFlinger(factory, SkipI
+     maxGraphicsHeight = std::max(max_graphics_height(0), 0);
+ 
+     mSupportsWideColor = has_wide_color_display(false);
++
++    // Android 12 and beyond, color management in display pipeline is turned on
++    // by default.
++    useColorManagement = use_color_management(true);
++
+     mDefaultCompositionDataspace =
+             static_cast<ui::Dataspace>(default_composition_dataspace(Dataspace::V0_SRGB));
+     mWideColorGamutCompositionDataspace = static_cast<ui::Dataspace>(wcg_composition_dataspace(
+diff --git a/services/surfaceflinger/SurfaceFlinger.h b/services/surfaceflinger/SurfaceFlinger.h
+index 5e403b21dc..d231e59fac 100644
+--- a/services/surfaceflinger/SurfaceFlinger.h
++++ b/services/surfaceflinger/SurfaceFlinger.h
+@@ -233,7 +233,7 @@ public:
+     static uint32_t maxGraphicsHeight;
+ 
+     // Indicate if device wants color management on its display.
+-    static const constexpr bool useColorManagement = true;
++    static bool useColorManagement;
+ 
+     static bool useContextPriority;
+ 
+diff --git a/services/surfaceflinger/SurfaceFlingerProperties.cpp b/services/surfaceflinger/SurfaceFlingerProperties.cpp
+index 96c8b54005..2589348d93 100644
+--- a/services/surfaceflinger/SurfaceFlingerProperties.cpp
++++ b/services/surfaceflinger/SurfaceFlingerProperties.cpp
+@@ -195,6 +195,17 @@ SurfaceFlingerProperties::primary_display_orientation_values primary_display_ori
+     return SurfaceFlingerProperties::primary_display_orientation_values::ORIENTATION_0;
+ }
+ 
++bool use_color_management(bool defaultValue) {
++    auto tmpuseColorManagement = SurfaceFlingerProperties::use_color_management();
++    auto tmpHasHDRDisplayVal = has_HDR_display(defaultValue);
++    auto tmpHasWideColorDisplayVal = has_wide_color_display(defaultValue);
++
++    auto tmpuseColorManagementVal = tmpuseColorManagement.has_value() ? *tmpuseColorManagement :
++        defaultValue;
++
++    return tmpuseColorManagementVal || tmpHasHDRDisplayVal || tmpHasWideColorDisplayVal;
++}
++
+ int64_t default_composition_dataspace(Dataspace defaultValue) {
+     auto temp = SurfaceFlingerProperties::default_composition_dataspace();
+     if (temp.has_value()) {
+diff --git a/services/surfaceflinger/SurfaceFlingerProperties.h b/services/surfaceflinger/SurfaceFlingerProperties.h
+index 951f8f8cb3..243377e673 100644
+--- a/services/surfaceflinger/SurfaceFlingerProperties.h
++++ b/services/surfaceflinger/SurfaceFlingerProperties.h
+@@ -59,6 +59,8 @@ bool start_graphics_allocator_service(bool defaultValue);
+ SurfaceFlingerProperties::primary_display_orientation_values primary_display_orientation(
+         SurfaceFlingerProperties::primary_display_orientation_values defaultValue);
+ 
++bool use_color_management(bool defaultValue);
++
+ int64_t default_composition_dataspace(
+         android::hardware::graphics::common::V1_2::Dataspace defaultValue);
+ 
+diff --git a/services/surfaceflinger/tests/unittests/DisplayTransactionTest.cpp b/services/surfaceflinger/tests/unittests/DisplayTransactionTest.cpp
+index e32cf8863b..bcad45c147 100644
+--- a/services/surfaceflinger/tests/unittests/DisplayTransactionTest.cpp
++++ b/services/surfaceflinger/tests/unittests/DisplayTransactionTest.cpp
+@@ -35,6 +35,7 @@ DisplayTransactionTest::DisplayTransactionTest(bool withMockScheduler) {
+     ALOGD("**** Setting up for %s.%s\n", test_info->test_case_name(), test_info->name());
+ 
+     mFlinger.mutableSupportsWideColor() = false;
++    mFlinger.mutableUseColorManagement() = false;
+     mFlinger.mutableDisplayColorSetting() = DisplayColorSetting::kUnmanaged;
+ 
+     mFlinger.setCreateBufferQueueFunction([](auto, auto, auto) {
+diff --git a/services/surfaceflinger/tests/unittests/DisplayTransactionTestHelpers.h b/services/surfaceflinger/tests/unittests/DisplayTransactionTestHelpers.h
+index ee12276994..e7997fc4e7 100644
+--- a/services/surfaceflinger/tests/unittests/DisplayTransactionTestHelpers.h
++++ b/services/surfaceflinger/tests/unittests/DisplayTransactionTestHelpers.h
+@@ -684,6 +684,7 @@ struct WideColorNotSupportedVariant {
+     static constexpr bool WIDE_COLOR_SUPPORTED = false;
+ 
+     static void injectConfigChange(DisplayTransactionTest* test) {
++        test->mFlinger.mutableUseColorManagement() = true;
+         test->mFlinger.mutableSupportsWideColor() = true;
+     }
+ 
+@@ -700,6 +701,7 @@ struct WideColorSupportNotConfiguredVariant {
+ 
+     static void injectConfigChange(DisplayTransactionTest* test) {
+         test->mFlinger.mutableSupportsWideColor() = false;
++        test->mFlinger.mutableUseColorManagement() = false;
+         test->mFlinger.mutableDisplayColorSetting() = DisplayColorSetting::kUnmanaged;
+     }
+ 
+diff --git a/services/surfaceflinger/tests/unittests/SurfaceFlinger_SetupNewDisplayDeviceInternalTest.cpp b/services/surfaceflinger/tests/unittests/SurfaceFlinger_SetupNewDisplayDeviceInternalTest.cpp
+index c0796df6cb..356e4e4e4b 100644
+--- a/services/surfaceflinger/tests/unittests/SurfaceFlinger_SetupNewDisplayDeviceInternalTest.cpp
++++ b/services/surfaceflinger/tests/unittests/SurfaceFlinger_SetupNewDisplayDeviceInternalTest.cpp
+@@ -36,6 +36,7 @@ struct WideColorP3ColorimetricSupportedVariant {
+     static constexpr bool WIDE_COLOR_SUPPORTED = true;
+ 
+     static void injectConfigChange(DisplayTransactionTest* test) {
++        test->mFlinger.mutableUseColorManagement() = true;
+         test->mFlinger.mutableSupportsWideColor() = true;
+         test->mFlinger.mutableDisplayColorSetting() = DisplayColorSetting::kUnmanaged;
+     }
+diff --git a/services/surfaceflinger/tests/unittests/TestableSurfaceFlinger.h b/services/surfaceflinger/tests/unittests/TestableSurfaceFlinger.h
+index 6b13c0ddaf..9def0e0e48 100644
+--- a/services/surfaceflinger/tests/unittests/TestableSurfaceFlinger.h
++++ b/services/surfaceflinger/tests/unittests/TestableSurfaceFlinger.h
+@@ -615,6 +615,7 @@ public:
+     const auto& hwcDisplayData() const { return getHwComposer().mDisplayData; }
+ 
+     auto& mutableSupportsWideColor() { return mFlinger->mSupportsWideColor; }
++    auto& mutableUseColorManagement() { return SurfaceFlinger::useColorManagement; }
+ 
+     auto& mutableCurrentState() { return mFlinger->mCurrentState; }
+     auto& mutableDisplayColorSetting() { return mFlinger->mDisplayColorSetting; }
+-- 
+2.30.2
+
